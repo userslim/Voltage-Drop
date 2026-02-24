@@ -4,97 +4,96 @@ import io
 import math
 
 # --- App Configuration ---
-st.set_page_config(page_title="CR13 Voltage Drop Manager", layout="wide")
-st.title("⚡ Station CR13: Multi-Connection Voltage Drop Manager")
+st.set_page_config(page_title="CR13 Voltage Drop Auditor", layout="wide")
+st.title("⚡ Station CR13: Voltage Drop Auditor & Excel Reporter")
 
 st.markdown("""
-Use this tool to verify multiple connections against the design limits in **PC1009CR13-ELS2101-**. 
-* **Tie Cables:** Limit is **2.0%**.
-* **Sub-Feeder:** Limit is **1.0% - 3.0%** (refer to schematic).
+Enter the cable details below. The exported Excel file will contain **live formulas** so your client can audit the math themselves.
 """)
 
-# --- Cable Reference Library (Cu/XLPE/LSZH) ---
-CABLE_LIBRARY = {
-    "Size (mm²)": [50, 70, 95, 120, 150, 185, 240, 300, 400, 500, 630],
-    "mV/A/m": [0.860, 0.600, 0.440, 0.350, 0.290, 0.240, 0.190, 0.160, 0.140, 0.120, 0.100]
+# --- Cable Reference Library (mV/A/m for Cu/XLPE) ---
+CABLE_REF = {
+    50: 0.860, 70: 0.600, 95: 0.440, 120: 0.350, 150: 0.290, 
+    185: 0.240, 240: 0.190, 300: 0.160, 400: 0.140, 500: 0.120, 630: 0.100
 }
-df_lib = pd.DataFrame(CABLE_LIBRARY)
 
-# --- Initial Data from your Load Schedules ---
-default_data = [
-    {"Connection": "Tie Cable 1", "Source": "MSB01", "Destination": "MSB03", "Load (kW)": 362.10, "Length (m)": 55.0, "Limit (%)": 2.0, "Cable Size": 300},
-    {"Connection": "Tie Cable 2", "Source": "MSB04", "Destination": "MSB02", "Load (kW)": 255.00, "Length (m)": 40.0, "Limit (%)": 2.0, "Cable Size": 185},
-    {"Connection": "Essential Feeder", "Source": "MSB02", "Destination": "EPSBC51", "Load (kW)": 47.06, "Length (m)": 80.0, "Limit (%)": 1.0, "Cable Size": 70},
+# --- Sidebar Global Constants ---
+st.sidebar.header("Global Settings")
+voltage = st.sidebar.selectbox("System Voltage (V)", [400, 230], index=0)
+pf = st.sidebar.slider("Power Factor (pf)", 0.8, 1.0, 0.85)
+
+# --- Dynamic Data Table ---
+default_rows = [
+    {"Connection": "Tie Cable 1", "Source": "MSB01", "Destination": "MSB03", "Load (kW)": 362.10, "Length (m)": 60, "Limit (%)": 2.0, "Size (mm²)": 300},
+    {"Connection": "Tie Cable 2", "Source": "MSB04", "Destination": "MSB02", "Load (kW)": 255.00, "Length (m)": 45, "Limit (%)": 2.0, "Size (mm²)": 240}
 ]
 
-# --- Editable Table Interface ---
-st.subheader("📋 Connection Verification Table")
-st.info("💡 You can edit cells directly or click '+' at the bottom to add new rows.")
-
-# User inputs pf and voltage globally for the station
-col_a, col_b = st.columns(2)
-pf = col_a.slider("Station Power Factor (cos φ)", 0.8, 1.0, 0.85)
-voltage = col_b.selectbox("System Voltage (V)", [400, 230], index=0)
-
-edited_df = st.data_editor(
-    pd.DataFrame(default_data),
-    num_rows="dynamic", # Enables the "Add Row" feature
+st.subheader("📋 Connection Manager")
+df_input = st.data_editor(
+    pd.DataFrame(default_rows),
+    num_rows="dynamic",
     column_config={
-        "Cable Size": st.column_config.SelectboxColumn(options=df_lib["Size (mm²)"].tolist())
+        "Size (mm²)": st.column_config.SelectboxColumn(options=list(CABLE_REF.keys()))
     },
     use_container_width=True
 )
 
-# --- Calculation Logic ---
-def calculate_metrics(row):
-    # 1. Current
+# --- Logic for Real-time Display (Streamlit) ---
+def get_calculation(row):
+    mv_am = CABLE_REF[row["Size (mm²)"]]
+    # Ib = P / (sqrt(3) * V * pf)
     ib = (row["Load (kW)"] * 1000) / (math.sqrt(3) * voltage * pf)
-    
-    # 2. Lookup mV/A/m
-    mv_am = df_lib.loc[df_lib["Size (mm²)"] == row["Cable Size"], "mV/A/m"].values[0]
-    
-    # 3. Calc Drop
-    drop_v = (mv_am * ib * row["Length (m)"]) / 1000
-    drop_perc = (drop_v / voltage) * 100
-    
-    # 4. Recommendation (What size actually works?)
-    suitable_cables = df_lib[((df_lib["mV/A/m"] * ib * row["Length (m)"]) / 1000 / voltage * 100) <= row["Limit (%)"]]
-    rec_size = suitable_cables["Size (mm²)"].iloc[0] if not suitable_cables.empty else "Parallel Required"
-    
-    return pd.Series([round(ib, 2), round(drop_perc, 3), rec_size])
+    v_drop = (mv_am * ib * row["Length (m)"]) / 1000
+    v_drop_perc = (v_drop / voltage) * 100
+    return pd.Series([round(ib, 2), round(v_drop_perc, 3)])
 
-# Apply calculations to the dataframe
-if not edited_df.empty:
-    edited_df[["Current (A)", "Actual Drop (%)", "Suggested Size"]] = edited_df.apply(calculate_metrics, axis=1)
-    
-    # Apply Status Flag
-    edited_df["Status"] = edited_df.apply(lambda x: "✅ PASS" if x["Actual Drop (%)"] <= x["Limit (%)"] else "❌ FAIL", axis=1)
+if not df_input.empty:
+    df_input[['Current (A)', 'Actual Drop (%)']] = df_input.apply(get_calculation, axis=1)
+    df_input['Status'] = df_input.apply(lambda x: "✅ PASS" if x['Actual Drop (%)'] <= x['Limit (%)'] else "❌ FAIL", axis=1)
+    st.dataframe(df_input, use_container_width=True)
 
-    # --- Display Results ---
-    st.dataframe(edited_df.style.applymap(
-        lambda x: 'background-color: #ffcccc' if x == "❌ FAIL" else ('background-color: #ccffcc' if x == "✅ PASS" else ''),
-        subset=['Status']
-    ), use_container_width=True)
-
-    # --- Excel Export ---
+# --- Excel Export with LIVE FORMULAS ---
+def export_to_excel(df):
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        edited_df.to_excel(writer, index=False, sheet_name='Verification_Report')
+    workbook = pd.ExcelWriter(output, engine='xlsxwriter')
     
-    st.download_button(
-        label="📥 Download Comprehensive Excel Report",
-        data=output.getvalue(),
-        file_name="Station_CR13_Voltage_Drop_Report.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-else:
-    st.warning("Please add at least one connection to see the analysis.")
+    # We write a clean sheet first to set headers
+    df_export = df[['Connection', 'Source', 'Destination', 'Load (kW)', 'Length (m)', 'Size (mm²)', 'Limit (%)']].copy()
+    df_export.to_excel(workbook, index=False, sheet_name='Audit_Report')
+    
+    ws = workbook.sheets['Audit_Report']
+    
+    # Define Column Indices (A=0, B=1...)
+    # D=Load, E=Length, F=Size, G=Limit
+    # We will add: H=mV/A/m, I=Current(A), J=Actual Drop(%)
+    ws.write(0, 7, "mV/A/m")
+    ws.write(0, 8, "Current Ib (A)")
+    ws.write(0, 9, "Actual Drop (%)")
+    ws.write(0, 10, "Status")
 
-st.divider()
-st.subheader("🛠 Technical Recommendations for Compliance")
-st.markdown("""
-If a tie cable is failing the **2.0% limit**, consider the following modifications:
-1.  **Upsizing:** Move to the 'Suggested Size' indicated in the table.
-2.  **Parallel Runs:** If a single 630mm² cable is still failing, use two cables in parallel (e.g., 2 x 4C 240mm²) to halve the resistance.
-3.  **Cable Material:** Always specify **Copper (Cu) XLPE/SWA/LSZH** for high-load tie connections.
-""")
+    for i, row in enumerate(df.values, start=2): # Excel rows start at 1, but we have header
+        # 1. Look up mV/A/m based on size (Column F) using VLOOKUP or Hardcoded for simplicity
+        size = row[5]
+        mv_val = CABLE_REF[size]
+        ws.write(i-1, 7, mv_val)
+        
+        # 2. Formula for Ib (Amps): =(D{i}*1000) / (1.732 * Voltage * pf)
+        # Column D is Load (index 3)
+        ws.write_formula(i-1, 8, f"=({xlsx_col(3)}{i}*1000)/(1.732*{voltage}*{pf})")
+        
+        # 3. Formula for % Drop: =((H{i} * I{i} * E{i})/1000) / Voltage * 100
+        # H is index 7 (mV), I is index 8 (Amps), E is index 4 (Length)
+        ws.write_formula(i-1, 9, f"=(({xlsx_col(7)}{i}*{xlsx_col(8)}{i}*{xlsx_col(4)}{i})/1000)/{voltage}*100")
+        
+        # 4. Status Formula
+        ws.write_formula(i-1, 10, f'=IF({xlsx_col(9)}{i}<={xlsx_col(6)}{i}, "PASS", "FAIL")')
+
+    workbook.close()
+    return output.getvalue()
+
+def xlsx_col(idx):
+    return chr(65 + idx) # Helper to convert 0->A, 1->B...
+
+if st.button("Generate Audit Report for Client"):
+    excel_data = export_to_excel(df_input)
+    st.download_button("📥 Download Excel with Formulas", excel_data, "Voltage_Drop_Audit.xlsx")
