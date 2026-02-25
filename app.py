@@ -15,10 +15,10 @@ CABLE_LIBRARY = {
 df_lib = pd.DataFrame(CABLE_LIBRARY)
 
 # Create tabs
-tab1, tab2 = st.tabs(["📋 Multi‑Connection Manager", "🔌 Transformer Feeder Audit"])
+tab1, tab2, tab3 = st.tabs(["📋 Multi‑Connection Manager", "🔌 Transformer Feeder Audit (Single)", "📊 Transformer Feeders (from Image)"])
 
 # ===============================
-# TAB 1: Original Multi‑Connection Manager
+# TAB 1: Multi‑Connection Manager (original)
 # ===============================
 with tab1:
     st.subheader("Multi‑Connection Voltage Drop Verification")
@@ -35,7 +35,6 @@ with tab1:
         {"Connection": "Essential Feeder", "Source": "MSB02", "Destination": "EPSBC51", "Load (kW)": 47.06, "Length (m)": 80.0, "Limit (%)": 1.0, "Cable Size": 70},
     ]
 
-    # --- Editable Table Interface ---
     st.info("💡 You can edit cells directly or click '+' at the bottom to add new rows.")
 
     col_a, col_b = st.columns(2)
@@ -65,13 +64,12 @@ with tab1:
         edited_df[["Current (A)", "Actual Drop (%)", "Suggested Size"]] = edited_df.apply(calculate_metrics, axis=1)
         edited_df["Status"] = edited_df.apply(lambda x: "✅ PASS" if x["Actual Drop (%)"] <= x["Limit (%)"] else "❌ FAIL", axis=1)
 
-        # --- Display Results ---
         st.dataframe(edited_df.style.applymap(
             lambda x: 'background-color: #ffcccc' if x == "❌ FAIL" else ('background-color: #ccffcc' if x == "✅ PASS" else ''),
             subset=['Status']
         ), use_container_width=True)
 
-        # --- Excel Export with Formulas (as before) ---
+        # --- Excel Export with Formulas ---
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             workbook = writer.book
@@ -134,13 +132,13 @@ with tab1:
     """)
 
 # ===============================
-# TAB 2: Transformer Feeder Audit
+# TAB 2: Transformer Feeder Audit (Single)
 # ===============================
 with tab2:
-    st.subheader("Transformer to MSB: Voltage Drop Audit")
-    st.info(f"Analysis for **2.6 MVA** Emergency Load over **291 m** route.")
+    st.subheader("Transformer to MSB: Single Feeder Audit")
+    st.info(f"Analysis for a single transformer feeder (e.g., emergency load over 291 m).")
 
-    # --- Engineering Constants (simplified for this audit) ---
+    # --- Engineering Constants (simplified) ---
     CABLE_REF = {300: 0.160, 400: 0.140, 500: 0.120, 630: 0.100}
 
     col1, col2 = st.columns(2)
@@ -149,7 +147,7 @@ with tab2:
         length = st.number_input("Cable Distance (m)", value=291.0, key="length")
     with col2:
         pf_t2 = st.number_input("Power Factor", value=0.85, key="pf_t2")
-        voltage_t2 = 400  # fixed for this analysis
+        voltage_t2 = 400  # fixed
         parallel_runs = st.number_input("Number of Parallel Runs (per phase)", min_value=1, value=10, key="parallel")
         selected_size = st.selectbox("Cable Size (mm²)", list(CABLE_REF.keys()), index=3, key="size")
 
@@ -187,20 +185,13 @@ with tab2:
             summary.to_excel(writer, index=False, sheet_name='Audit')
             ws = writer.sheets['Audit']
 
-            # Helper to convert column index to letter (0->A, 1->B, ...)
             def xlsx_col(idx):
                 return chr(65 + idx)
 
-            # Write formulas at row 2 (data starts at row 2)
             ws.write(0, 6, "Calculated Ib (A)")
-            # Formula: = (B2*1000) / (1.732*400*PF)
-            # B2 is Demand (kW) (col 1), PF from input cell
             ws.write_formula(1, 6, f"=({xlsx_col(1)}2*1000)/(1.732*{voltage_t2}*{pf_t2})")
 
             ws.write(0, 7, "Actual Drop (%)")
-            # Formula: ((mV/A/m * (Ib_per_cable) * Distance) / 1000) / Voltage * 100
-            # mv_am is fixed from selected cable, Ib_per_cable = calculated Ib / parallel runs
-            # G2 contains calculated Ib
             ws.write_formula(1, 7, f"=(({mv_am}*(G2/{xlsx_col(3)}2)*{xlsx_col(2)}2)/1000)/{voltage_t2}*100")
 
         return output.getvalue()
@@ -211,3 +202,115 @@ with tab2:
         file_name="Transformer_Feeder_Audit.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+# ===============================
+# TAB 3: Transformer Feeders (from Image)
+# ===============================
+with tab3:
+    st.subheader("Transformer to MSB Feeders (from CR13 Image)")
+    st.info("""
+    Based on the attached image: two transformers TX‑1 and TX‑2 feeding MSB‑01 and MSB‑02 with **8×4×630 mm²** cables over **291 m**.  
+    Edit the table below to adjust parameters. The cable library includes mV/A/m values for all standard sizes.
+    """)
+
+    # Default data from image (using emergency load values)
+    default_transformer_data = [
+        {"Transformer": "TX-1", "MSB": "MSB-01", "Load (kW)": 1907, "Length (m)": 291, "Parallel Runs": 2, "Cable Size": 630, "Limit (%)": 2.0},
+        {"Transformer": "TX-2", "MSB": "MSB-02", "Load (kW)": 2333, "Length (m)": 291, "Parallel Runs": 2, "Cable Size": 630, "Limit (%)": 2.0},
+    ]
+
+    col1, col2 = st.columns(2)
+    pf_t3 = col1.slider("Power Factor", 0.8, 1.0, 0.85, key="pf_t3")
+    voltage_t3 = col2.selectbox("System Voltage (V)", [400, 230], index=0, key="v_t3")
+
+    edited_t3_df = st.data_editor(
+        pd.DataFrame(default_transformer_data),
+        num_rows="dynamic",
+        column_config={
+            "Cable Size": st.column_config.SelectboxColumn(options=df_lib["Size (mm²)"].tolist())
+        },
+        use_container_width=True
+    )
+
+    if not edited_t3_df.empty:
+        # Calculation for each row
+        def calc_t3(row):
+            total_current = (row["Load (kW)"] * 1000) / (math.sqrt(3) * voltage_t3 * pf_t3)
+            mv_am = df_lib.loc[df_lib["Size (mm²)"] == row["Cable Size"], "mV/A/m"].values[0]
+            # drop volts = (mV/A/m * total_current * length) / (1000 * parallel_runs)
+            drop_v = (mv_am * total_current * row["Length (m)"]) / (1000 * row["Parallel Runs"])
+            drop_perc = (drop_v / voltage_t3) * 100
+            status = "✅ PASS" if drop_perc <= row["Limit (%)"] else "❌ FAIL"
+
+            # Simple suggestion: required parallel runs to meet limit with same cable
+            required_N = math.ceil((mv_am * total_current * row["Length (m)"] * 100) / (1000 * voltage_t3 * row["Limit (%)"]))
+            # Also find smallest cable that works with current parallel runs
+            suitable = df_lib[((df_lib["mV/A/m"] * total_current * row["Length (m)"]) / (1000 * row["Parallel Runs"] * voltage_t3) * 100) <= row["Limit (%)"]]
+            rec_size = suitable["Size (mm²)"].iloc[0] if not suitable.empty else "Parallel Required"
+            suggestion = f"Need {required_N} parallel runs or upgrade to {rec_size} mm²"
+            return pd.Series([round(total_current, 2), round(drop_perc, 3), status, suggestion])
+
+        edited_t3_df[["Total Current (A)", "Drop (%)", "Status", "Suggestion"]] = edited_t3_df.apply(calc_t3, axis=1)
+
+        # Display with conditional formatting
+        st.dataframe(edited_t3_df.style.applymap(
+            lambda x: 'background-color: #ffcccc' if x == "❌ FAIL" else ('background-color: #ccffcc' if x == "✅ PASS" else ''),
+            subset=['Status']
+        ), use_container_width=True)
+
+        # --- Excel Export with Formulas ---
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            workbook = writer.book
+            edited_t3_df.to_excel(writer, sheet_name='Transformer_Feeders_Values', index=False)
+
+            worksheet = workbook.add_worksheet('Formulas')
+            writer.sheets['Formulas'] = worksheet
+
+            worksheet.write('A1', 'Voltage (V):')
+            worksheet.write('B1', voltage_t3)
+            worksheet.write('A2', 'Power Factor:')
+            worksheet.write('B2', pf_t3)
+
+            # Headers: first 7 columns are inputs, then calculated
+            headers = list(edited_t3_df.columns[:7]) + ['Total Current (A) [formula]', 'Drop (%) [formula]', 'Status [formula]', 'Suggestion (from app)']
+            for col_num, header in enumerate(headers):
+                worksheet.write(3, col_num, header)
+
+            for r in range(len(edited_t3_df)):
+                for c in range(7):
+                    worksheet.write(r+4, c, edited_t3_df.iloc[r, c])
+
+            # Cable library in columns M:N
+            worksheet.write('M1', 'Cable Size (mm²)')
+            worksheet.write('N1', 'mV/A/m')
+            for i, size in enumerate(df_lib['Size (mm²)']):
+                worksheet.write(i+1, 12, size)
+                worksheet.write(i+1, 13, df_lib['mV/A/m'][i])
+
+            for r in range(len(edited_t3_df)):
+                row_excel = r + 5
+                # Total current formula: = (C*1000)/(SQRT(3)*$B$1*$B$2) where C is Load (kW) column (index 2)
+                current_formula = f'=(C{row_excel}*1000)/(SQRT(3)*$B$1*$B$2)'
+                worksheet.write_formula(r+4, 7, current_formula)
+
+                # Drop % formula: = ((VLOOKUP(Frow, $M:$N, 2, FALSE) * Hrow * Drow) / (1000 * Erow)) / B1 * 100
+                # F = Cable Size, H = Total Current, D = Length, E = Parallel Runs
+                drop_formula = f'=((VLOOKUP(F{row_excel},$M:$N,2,FALSE)*H{row_excel}*D{row_excel})/(1000*E{row_excel}))/B1*100'
+                worksheet.write_formula(r+4, 8, drop_formula)
+
+                status_formula = f'=IF(I{row_excel}<=G{row_excel},"✅ PASS","❌ FAIL")'  # G = Limit
+                worksheet.write_formula(r+4, 9, status_formula)
+
+                worksheet.write(r+4, 10, edited_t3_df.iloc[r, 10])  # Suggestion static
+
+            worksheet.set_column(0, 10, 18)
+
+        st.download_button(
+            label="📥 Download Transformer Feeders Excel Report (with formulas)",
+            data=output.getvalue(),
+            file_name="CR13_Transformer_Feeders_Report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.warning("Add transformer feeders to analyze.")
