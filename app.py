@@ -18,7 +18,7 @@ df_lib = pd.DataFrame(CABLE_LIBRARY)
 tab1, tab2, tab3 = st.tabs(["📋 Multi‑Connection Manager", "🔌 Transformer Feeder Audit (Single)", "📊 Transformer Feeders (from Image)"])
 
 # ===============================
-# TAB 1: Multi‑Connection Manager (original)
+# TAB 1: Multi‑Connection Manager (with parallel runs)
 # ===============================
 with tab1:
     st.subheader("Multi‑Connection Voltage Drop Verification")
@@ -28,14 +28,14 @@ with tab1:
     * **Sub-Feeder:** Limit is **1.0% - 3.0%** (refer to schematic).
     """)
 
-    # --- Initial Data from Load Schedules ---
+    # --- Initial Data from Load Schedules (now with Parallel Runs) ---
     default_data = [
-        {"Connection": "Tie Cable 1", "Source": "MSB01", "Destination": "MSB03", "Load (kW)": 362.10, "Length (m)": 55.0, "Limit (%)": 2.0, "Cable Size": 300},
-        {"Connection": "Tie Cable 2", "Source": "MSB04", "Destination": "MSB02", "Load (kW)": 255.00, "Length (m)": 40.0, "Limit (%)": 2.0, "Cable Size": 185},
-        {"Connection": "Essential Feeder", "Source": "MSB02", "Destination": "EPSBC51", "Load (kW)": 47.06, "Length (m)": 80.0, "Limit (%)": 1.0, "Cable Size": 70},
+        {"Connection": "Tie Cable 1", "Source": "MSB01", "Destination": "MSB03", "Load (kW)": 362.10, "Length (m)": 55.0, "Parallel Runs": 1, "Limit (%)": 2.0, "Cable Size": 300},
+        {"Connection": "Tie Cable 2", "Source": "MSB04", "Destination": "MSB02", "Load (kW)": 255.00, "Length (m)": 40.0, "Parallel Runs": 1, "Limit (%)": 2.0, "Cable Size": 185},
+        {"Connection": "Essential Feeder", "Source": "MSB02", "Destination": "EPSBC51", "Load (kW)": 47.06, "Length (m)": 80.0, "Parallel Runs": 1, "Limit (%)": 1.0, "Cable Size": 70},
     ]
 
-    st.info("💡 You can edit cells directly or click '+' at the bottom to add new rows.")
+    st.info("💡 You can edit cells directly or click '+' at the bottom to add new rows. 'Parallel Runs' means number of cables per phase.")
 
     col_a, col_b = st.columns(2)
     pf_t1 = col_a.slider("Station Power Factor (cos φ)", 0.8, 1.0, 0.85, key="pf_t1")
@@ -45,31 +45,48 @@ with tab1:
         pd.DataFrame(default_data),
         num_rows="dynamic",
         column_config={
-            "Cable Size": st.column_config.SelectboxColumn(options=df_lib["Size (mm²)"].tolist())
+            "Cable Size": st.column_config.SelectboxColumn(options=df_lib["Size (mm²)"].tolist()),
+            "Parallel Runs": st.column_config.NumberColumn(min_value=1, step=1)
         },
         use_container_width=True
     )
 
-    # --- Calculation Logic ---
+    # --- Calculation Logic with parallel runs ---
     def calculate_metrics(row):
-        ib = (row["Load (kW)"] * 1000) / (math.sqrt(3) * voltage_t1 * pf_t1)
+        # Total current
+        ib_total = (row["Load (kW)"] * 1000) / (math.sqrt(3) * voltage_t1 * pf_t1)
+        # Current per cable (for drop calculation)
+        ib_per_cable = ib_total / row["Parallel Runs"]
+        # Lookup mV/A/m
         mv_am = df_lib.loc[df_lib["Size (mm²)"] == row["Cable Size"], "mV/A/m"].values[0]
-        drop_v = (mv_am * ib * row["Length (m)"]) / 1000
+        # Voltage drop per cable (same as total drop)
+        drop_v = (mv_am * ib_per_cable * row["Length (m)"]) / 1000
         drop_perc = (drop_v / voltage_t1) * 100
-        suitable_cables = df_lib[((df_lib["mV/A/m"] * ib * row["Length (m)"]) / 1000 / voltage_t1 * 100) <= row["Limit (%)"]]
-        rec_size = suitable_cables["Size (mm²)"].iloc[0] if not suitable_cables.empty else "Parallel Required"
-        return pd.Series([round(ib, 2), round(drop_perc, 3), rec_size])
+
+        # Suggestion: required parallel runs with same cable
+        required_parallel = math.ceil((mv_am * ib_total * row["Length (m)"] * 100) / (1000 * voltage_t1 * row["Limit (%)"]))
+        # Find smallest cable that works with current parallel runs
+        suitable = df_lib[((df_lib["mV/A/m"] * ib_total * row["Length (m)"]) / (1000 * row["Parallel Runs"] * voltage_t1) * 100) <= row["Limit (%)"]]
+        if not suitable.empty:
+            rec_size = suitable["Size (mm²)"].iloc[0]
+        else:
+            rec_size = "Parallel Required"
+        suggestion = f"Need {required_parallel} runs or upgrade to {rec_size} mm²"
+
+        return pd.Series([round(ib_total, 2), round(drop_perc, 3), suggestion])
 
     if not edited_df.empty:
-        edited_df[["Current (A)", "Actual Drop (%)", "Suggested Size"]] = edited_df.apply(calculate_metrics, axis=1)
+        # Apply calculations
+        edited_df[["Current (A)", "Actual Drop (%)", "Suggestion"]] = edited_df.apply(calculate_metrics, axis=1)
         edited_df["Status"] = edited_df.apply(lambda x: "✅ PASS" if x["Actual Drop (%)"] <= x["Limit (%)"] else "❌ FAIL", axis=1)
 
+        # Display with conditional formatting
         st.dataframe(edited_df.style.applymap(
             lambda x: 'background-color: #ffcccc' if x == "❌ FAIL" else ('background-color: #ccffcc' if x == "✅ PASS" else ''),
             subset=['Status']
         ), use_container_width=True)
 
-        # --- Excel Export with Formulas ---
+        # --- Excel Export with Formulas (including parallel runs) ---
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             workbook = writer.book
@@ -83,12 +100,14 @@ with tab1:
             worksheet.write('A2', 'Power Factor:')
             worksheet.write('B2', pf_t1)
 
-            headers = list(edited_df.columns[:7]) + ['Current (A) [formula]', 'Actual Drop (%) [formula]', 'Status [formula]', 'Suggested Size (from app)']
+            # Headers: first 8 columns are inputs (now including Parallel Runs)
+            headers = list(edited_df.columns[:8]) + ['Current (A) [formula]', 'Actual Drop (%) [formula]', 'Status [formula]', 'Suggestion (from app)']
             for col_num, header in enumerate(headers):
                 worksheet.write(3, col_num, header)
 
+            # Write input data (first 8 columns) starting from row 4
             for r in range(len(edited_df)):
-                for c in range(7):
+                for c in range(8):
                     worksheet.write(r+4, c, edited_df.iloc[r, c])
 
             # Cable library in columns M:N
@@ -100,18 +119,23 @@ with tab1:
 
             for r in range(len(edited_df)):
                 row_excel = r + 5
+                # Current formula: = (Load*1000)/(SQRT(3)*Voltage*PF)   Load is column D (index 3)
                 current_formula = f'=(D{row_excel}*1000)/(SQRT(3)*$B$1*$B$2)'
-                worksheet.write_formula(r+4, 7, current_formula)
+                worksheet.write_formula(r+4, 8, current_formula)   # column I (index 8)
 
-                drop_formula = f'=((VLOOKUP(G{row_excel},$M:$N,2,FALSE)*H{row_excel}*E{row_excel})/1000)/$B$1*100'
-                worksheet.write_formula(r+4, 8, drop_formula)
+                # Drop % formula: = ((VLOOKUP(Hrow, $M:$N, 2, FALSE) * Irow * Erow) / (1000 * Frow)) / B1 * 100
+                # H = Cable Size (col 7), I = Current (col 8), E = Length (col 4), F = Parallel Runs (col 5)
+                drop_formula = f'=((VLOOKUP(H{row_excel},$M:$N,2,FALSE)*I{row_excel}*E{row_excel})/(1000*F{row_excel}))/B1*100'
+                worksheet.write_formula(r+4, 9, drop_formula)       # column J (index 9)
 
-                status_formula = f'=IF(I{row_excel}<=F{row_excel},"✅ PASS","❌ FAIL")'
-                worksheet.write_formula(r+4, 9, status_formula)
+                # Status formula: = IF(Jrow <= Grow, "✅ PASS", "❌ FAIL")   G = Limit (col 6)
+                status_formula = f'=IF(J{row_excel}<=G{row_excel},"✅ PASS","❌ FAIL")'
+                worksheet.write_formula(r+4, 10, status_formula)    # column K (index 10)
 
-                worksheet.write(r+4, 10, edited_df.iloc[r, 9])
+                # Suggestion (static from app)
+                worksheet.write(r+4, 11, edited_df.iloc[r, 10])     # column L (index 11)
 
-            worksheet.set_column(0, 10, 18)
+            worksheet.set_column(0, 11, 18)
 
         st.download_button(
             label="📥 Download Multi‑Connection Excel Report (with formulas)",
@@ -126,9 +150,10 @@ with tab1:
     st.subheader("🛠 Technical Recommendations for Compliance")
     st.markdown("""
     If a tie cable is failing the **2.0% limit**, consider:
-    1. **Upsizing:** Move to the 'Suggested Size' indicated.
-    2. **Parallel Runs:** If a single 630mm² cable still fails, use two cables in parallel.
-    3. **Cable Material:** Always specify **Copper (Cu) XLPE/SWA/LSZH** for high-load tie connections.
+    1. **Increasing parallel runs** (use multiple cables per phase).
+    2. **Upsizing the cable** to a larger cross‑section.
+    3. **Combining both** – the suggestion column gives you the minimum requirement.
+    Always specify **Copper (Cu) XLPE/SWA/LSZH** for high-load tie connections.
     """)
 
 # ===============================
