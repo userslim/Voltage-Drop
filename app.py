@@ -18,7 +18,7 @@ df_lib = pd.DataFrame(CABLE_LIBRARY)
 tab1, tab2, tab3 = st.tabs(["📋 Multi‑Connection Manager", "🔌 Transformer Feeder Audit (Single)", "📊 Transformer Feeders (from Image)"])
 
 # ===============================
-# TAB 1: Multi‑Connection Manager (with parallel runs)
+# TAB 1: Multi‑Connection Manager (with parallel runs, connected load & max demand)
 # ===============================
 with tab1:
     st.subheader("Multi‑Connection Voltage Drop Verification")
@@ -28,11 +28,17 @@ with tab1:
     * **Sub-Feeder:** Limit is **1.0% - 3.0%** (refer to schematic).
     """)
 
-    # --- Initial Data from Load Schedules (now with Parallel Runs) ---
+    # --- Initial Data with Connected Load and Max Demand ---
     default_data = [
-        {"Connection": "Tie Cable 1", "Source": "MSB01", "Destination": "MSB03", "Load (kW)": 362.10, "Length (m)": 55.0, "Parallel Runs": 1, "Limit (%)": 2.0, "Cable Size": 300},
-        {"Connection": "Tie Cable 2", "Source": "MSB04", "Destination": "MSB02", "Load (kW)": 255.00, "Length (m)": 40.0, "Parallel Runs": 1, "Limit (%)": 2.0, "Cable Size": 185},
-        {"Connection": "Essential Feeder", "Source": "MSB02", "Destination": "EPSBC51", "Load (kW)": 47.06, "Length (m)": 80.0, "Parallel Runs": 1, "Limit (%)": 1.0, "Cable Size": 70},
+        {"Connection": "Tie Cable 1", "Source": "MSB01", "Destination": "MSB03", 
+         "Connected Load (kW)": 362.10, "Max Demand (kW)": 362.10, 
+         "Length (m)": 55.0, "Parallel Runs": 1, "Limit (%)": 2.0, "Cable Size": 300},
+        {"Connection": "Tie Cable 2", "Source": "MSB04", "Destination": "MSB02", 
+         "Connected Load (kW)": 255.00, "Max Demand (kW)": 255.00, 
+         "Length (m)": 40.0, "Parallel Runs": 1, "Limit (%)": 2.0, "Cable Size": 185},
+        {"Connection": "Essential Feeder", "Source": "MSB02", "Destination": "EPSBC51", 
+         "Connected Load (kW)": 47.06, "Max Demand (kW)": 47.06, 
+         "Length (m)": 80.0, "Parallel Runs": 1, "Limit (%)": 1.0, "Cable Size": 70},
     ]
 
     st.info("💡 You can edit cells directly or click '+' at the bottom to add new rows. 'Parallel Runs' means number of cables per phase.")
@@ -51,10 +57,10 @@ with tab1:
         use_container_width=True
     )
 
-    # --- Calculation Logic with parallel runs ---
+    # --- Calculation Logic using Max Demand ---
     def calculate_metrics(row):
-        # Total current
-        ib_total = (row["Load (kW)"] * 1000) / (math.sqrt(3) * voltage_t1 * pf_t1)
+        # Total current based on Max Demand
+        ib_total = (row["Max Demand (kW)"] * 1000) / (math.sqrt(3) * voltage_t1 * pf_t1)
         # Current per cable (for drop calculation)
         ib_per_cable = ib_total / row["Parallel Runs"]
         # Lookup mV/A/m
@@ -86,7 +92,7 @@ with tab1:
             subset=['Status']
         ), use_container_width=True)
 
-        # --- Excel Export with Formulas (including parallel runs) ---
+        # --- Excel Export with Formulas (including Connected Load and Max Demand) ---
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             workbook = writer.book
@@ -100,14 +106,14 @@ with tab1:
             worksheet.write('A2', 'Power Factor:')
             worksheet.write('B2', pf_t1)
 
-            # Headers: first 8 columns are inputs (now including Parallel Runs)
-            headers = list(edited_df.columns[:8]) + ['Current (A) [formula]', 'Actual Drop (%) [formula]', 'Status [formula]', 'Suggestion (from app)']
+            # Headers: first 9 columns are inputs (Connection, Source, Destination, Connected Load, Max Demand, Length, Parallel Runs, Limit, Cable Size)
+            headers = list(edited_df.columns[:9]) + ['Current (A) [formula]', 'Actual Drop (%) [formula]', 'Status [formula]', 'Suggestion (from app)']
             for col_num, header in enumerate(headers):
                 worksheet.write(3, col_num, header)
 
-            # Write input data (first 8 columns) starting from row 4
+            # Write input data (first 9 columns) starting from row 4
             for r in range(len(edited_df)):
-                for c in range(8):
+                for c in range(9):
                     worksheet.write(r+4, c, edited_df.iloc[r, c])
 
             # Cable library in columns M:N
@@ -119,23 +125,23 @@ with tab1:
 
             for r in range(len(edited_df)):
                 row_excel = r + 5
-                # Current formula: = (Load*1000)/(SQRT(3)*Voltage*PF)   Load is column D (index 3)
-                current_formula = f'=(D{row_excel}*1000)/(SQRT(3)*$B$1*$B$2)'
-                worksheet.write_formula(r+4, 8, current_formula)   # column I (index 8)
+                # Current formula: = (Max Demand *1000)/(SQRT(3)*Voltage*PF)   Max Demand is column E (index 4)
+                current_formula = f'=(E{row_excel}*1000)/(SQRT(3)*$B$1*$B$2)'
+                worksheet.write_formula(r+4, 9, current_formula)   # column J (index 9)
 
-                # Drop % formula: = ((VLOOKUP(Hrow, $M:$N, 2, FALSE) * Irow * Erow) / (1000 * Frow)) / B1 * 100
-                # H = Cable Size (col 7), I = Current (col 8), E = Length (col 4), F = Parallel Runs (col 5)
-                drop_formula = f'=((VLOOKUP(H{row_excel},$M:$N,2,FALSE)*I{row_excel}*E{row_excel})/(1000*F{row_excel}))/B1*100'
-                worksheet.write_formula(r+4, 9, drop_formula)       # column J (index 9)
+                # Drop % formula: = ((VLOOKUP(Irow, $M:$N, 2, FALSE) * Jrow * Frow) / (1000 * Grow)) / B1 * 100
+                # I = Cable Size (col 8), J = Current (col 9), F = Length (col 5), G = Parallel Runs (col 6)
+                drop_formula = f'=((VLOOKUP(I{row_excel},$M:$N,2,FALSE)*J{row_excel}*F{row_excel})/(1000*G{row_excel}))/B1*100'
+                worksheet.write_formula(r+4, 10, drop_formula)      # column K (index 10)
 
-                # Status formula: = IF(Jrow <= Grow, "✅ PASS", "❌ FAIL")   G = Limit (col 6)
-                status_formula = f'=IF(J{row_excel}<=G{row_excel},"✅ PASS","❌ FAIL")'
-                worksheet.write_formula(r+4, 10, status_formula)    # column K (index 10)
+                # Status formula: = IF(Krow <= Hrow, "✅ PASS", "❌ FAIL")   H = Limit (col 7)
+                status_formula = f'=IF(K{row_excel}<=H{row_excel},"✅ PASS","❌ FAIL")'
+                worksheet.write_formula(r+4, 11, status_formula)    # column L (index 11)
 
                 # Suggestion (static from app)
-                worksheet.write(r+4, 11, edited_df.iloc[r, 10])     # column L (index 11)
+                worksheet.write(r+4, 12, edited_df.iloc[r, 11])     # column M (index 12)
 
-            worksheet.set_column(0, 11, 18)
+            worksheet.set_column(0, 12, 18)
 
         st.download_button(
             label="📥 Download Multi‑Connection Excel Report (with formulas)",
@@ -157,7 +163,7 @@ with tab1:
     """)
 
 # ===============================
-# TAB 2: Transformer Feeder Audit (Single) – now with selectable voltage
+# TAB 2: Transformer Feeder Audit (Single) – with Connected Load and Max Demand
 # ===============================
 with tab2:
     st.subheader("Transformer to MSB: Single Feeder Audit")
@@ -168,7 +174,8 @@ with tab2:
 
     col1, col2 = st.columns(2)
     with col1:
-        load_kw = st.number_input("Maximum Demand (kW)", value=2333.0, key="load_kw")
+        connected_load = st.number_input("Connected Load (kW)", value=2500.0, key="conn_load")
+        max_demand = st.number_input("Max Demand (kW)", value=2333.0, key="max_demand")
         length = st.number_input("Cable Distance (m)", value=291.0, key="length")
     with col2:
         pf_t2 = st.number_input("Power Factor", value=0.85, key="pf_t2")
@@ -176,8 +183,8 @@ with tab2:
         parallel_runs = st.number_input("Number of Parallel Runs (per phase)", min_value=1, value=10, key="parallel")
         selected_size = st.selectbox("Cable Size (mm²)", list(CABLE_REF.keys()), index=3, key="size")
 
-    # --- Calculations ---
-    ib_total = (load_kw * 1000) / (math.sqrt(3) * voltage_t2 * pf_t2)
+    # --- Calculations using Max Demand ---
+    ib_total = (max_demand * 1000) / (math.sqrt(3) * voltage_t2 * pf_t2)
     ib_per_cable = ib_total / parallel_runs
     mv_am = CABLE_REF[selected_size]
     v_drop_volts = (mv_am * ib_per_cable * length) / 1000
@@ -201,7 +208,8 @@ with tab2:
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             summary = pd.DataFrame([{
                 "Description": "Transformer to MSB Tie",
-                "Demand (kW)": load_kw,
+                "Connected Load (kW)": connected_load,
+                "Max Demand (kW)": max_demand,
                 "Distance (m)": length,
                 "Cables per Phase": parallel_runs,
                 "Size (mm²)": selected_size,
@@ -213,13 +221,13 @@ with tab2:
             def xlsx_col(idx):
                 return chr(65 + idx)
 
-            ws.write(0, 6, "Calculated Ib (A)")
-            # Use selected voltage in formula
-            ws.write_formula(1, 6, f"=({xlsx_col(1)}2*1000)/(1.732*{voltage_t2}*{pf_t2})")
+            ws.write(0, 7, "Calculated Ib (A)")
+            # Use Max Demand (column C) for current
+            ws.write_formula(1, 7, f"=(C2*1000)/(1.732*{voltage_t2}*{pf_t2})")
 
-            ws.write(0, 7, "Actual Drop (%)")
-            # Drop formula uses voltage and parallel runs
-            ws.write_formula(1, 7, f"=(({mv_am}*(G2/{xlsx_col(3)}2)*{xlsx_col(2)}2)/1000)/{voltage_t2}*100")
+            ws.write(0, 8, "Actual Drop (%)")
+            # Drop formula: ((mV * (Ib / parallel) * length) / 1000) / V * 100
+            ws.write_formula(1, 8, f"=(({mv_am}*(H2/D2)*B2)/1000)/{voltage_t2}*100")
 
         return output.getvalue()
 
@@ -231,19 +239,23 @@ with tab2:
     )
 
 # ===============================
-# TAB 3: Transformer Feeders (from Image) – with 415V option
+# TAB 3: Transformer Feeders (from Image) – with Connected Load and Max Demand
 # ===============================
 with tab3:
     st.subheader("Transformer to MSB Feeders (from CR13 Image)")
     st.info("""
     Based on the attached image: two transformers TX‑1 and TX‑2 feeding MSB‑01 and MSB‑02 with **8×4×630 mm²** cables over **291 m**.  
-    Edit the table below to adjust parameters. The cable library includes mV/A/m values for all standard sizes.
+    The table below includes both Connected Load and Max Demand as per the image data.
     """)
 
-    # Default data from image (using emergency load values)
+    # Default data from image (Connected Load = first number, Max Demand = second number)
     default_transformer_data = [
-        {"Transformer": "TX-1", "MSB": "MSB-01", "Load (kW)": 1907, "Length (m)": 291, "Parallel Runs": 2, "Cable Size": 630, "Limit (%)": 2.0},
-        {"Transformer": "TX-2", "MSB": "MSB-02", "Load (kW)": 2333, "Length (m)": 291, "Parallel Runs": 2, "Cable Size": 630, "Limit (%)": 2.0},
+        {"Transformer": "TX-1", "MSB": "MSB-01", 
+         "Connected Load (kW)": 2363, "Max Demand (kW)": 1907, 
+         "Length (m)": 291, "Parallel Runs": 2, "Cable Size": 630, "Limit (%)": 2.0},
+        {"Transformer": "TX-2", "MSB": "MSB-02", 
+         "Connected Load (kW)": 2485, "Max Demand (kW)": 2333, 
+         "Length (m)": 291, "Parallel Runs": 2, "Cable Size": 630, "Limit (%)": 2.0},
     ]
 
     col1, col2 = st.columns(2)
@@ -260,18 +272,18 @@ with tab3:
     )
 
     if not edited_t3_df.empty:
-        # Calculation for each row
+        # Calculation for each row using Max Demand
         def calc_t3(row):
-            total_current = (row["Load (kW)"] * 1000) / (math.sqrt(3) * voltage_t3 * pf_t3)
+            total_current = (row["Max Demand (kW)"] * 1000) / (math.sqrt(3) * voltage_t3 * pf_t3)
             mv_am = df_lib.loc[df_lib["Size (mm²)"] == row["Cable Size"], "mV/A/m"].values[0]
             # drop volts = (mV/A/m * total_current * length) / (1000 * parallel_runs)
             drop_v = (mv_am * total_current * row["Length (m)"]) / (1000 * row["Parallel Runs"])
             drop_perc = (drop_v / voltage_t3) * 100
             status = "✅ PASS" if drop_perc <= row["Limit (%)"] else "❌ FAIL"
 
-            # Simple suggestion: required parallel runs to meet limit with same cable
+            # Suggestion: required parallel runs with same cable
             required_N = math.ceil((mv_am * total_current * row["Length (m)"] * 100) / (1000 * voltage_t3 * row["Limit (%)"]))
-            # Also find smallest cable that works with current parallel runs
+            # Find smallest cable that works with current parallel runs
             suitable = df_lib[((df_lib["mV/A/m"] * total_current * row["Length (m)"]) / (1000 * row["Parallel Runs"] * voltage_t3) * 100) <= row["Limit (%)"]]
             rec_size = suitable["Size (mm²)"].iloc[0] if not suitable.empty else "Parallel Required"
             suggestion = f"Need {required_N} parallel runs or upgrade to {rec_size} mm²"
@@ -299,13 +311,13 @@ with tab3:
             worksheet.write('A2', 'Power Factor:')
             worksheet.write('B2', pf_t3)
 
-            # Headers: first 7 columns are inputs, then calculated
-            headers = list(edited_t3_df.columns[:7]) + ['Total Current (A) [formula]', 'Drop (%) [formula]', 'Status [formula]', 'Suggestion (from app)']
+            # Headers: first 8 columns are inputs (Transformer, MSB, Connected Load, Max Demand, Length, Parallel Runs, Cable Size, Limit)
+            headers = list(edited_t3_df.columns[:8]) + ['Total Current (A) [formula]', 'Drop (%) [formula]', 'Status [formula]', 'Suggestion (from app)']
             for col_num, header in enumerate(headers):
                 worksheet.write(3, col_num, header)
 
             for r in range(len(edited_t3_df)):
-                for c in range(7):
+                for c in range(8):
                     worksheet.write(r+4, c, edited_t3_df.iloc[r, c])
 
             # Cable library in columns M:N
@@ -317,21 +329,21 @@ with tab3:
 
             for r in range(len(edited_t3_df)):
                 row_excel = r + 5
-                # Total current formula: = (C*1000)/(SQRT(3)*$B$1*$B$2) where C is Load (kW) column (index 2)
-                current_formula = f'=(C{row_excel}*1000)/(SQRT(3)*$B$1*$B$2)'
-                worksheet.write_formula(r+4, 7, current_formula)
+                # Total current formula: = (Max Demand *1000)/(SQRT(3)*$B$1*$B$2)   Max Demand is column D (index 3)
+                current_formula = f'=(D{row_excel}*1000)/(SQRT(3)*$B$1*$B$2)'
+                worksheet.write_formula(r+4, 8, current_formula)   # column I (index 8)
 
-                # Drop % formula: = ((VLOOKUP(Frow, $M:$N, 2, FALSE) * Hrow * Drow) / (1000 * Erow)) / B1 * 100
-                # F = Cable Size, H = Total Current, D = Length, E = Parallel Runs
-                drop_formula = f'=((VLOOKUP(F{row_excel},$M:$N,2,FALSE)*H{row_excel}*D{row_excel})/(1000*E{row_excel}))/B1*100'
-                worksheet.write_formula(r+4, 8, drop_formula)
+                # Drop % formula: = ((VLOOKUP(Grow, $M:$N, 2, FALSE) * Irow * Erow) / (1000 * Frow)) / B1 * 100
+                # G = Cable Size (col 6), I = Current (col 8), E = Length (col 4), F = Parallel Runs (col 5)
+                drop_formula = f'=((VLOOKUP(G{row_excel},$M:$N,2,FALSE)*I{row_excel}*E{row_excel})/(1000*F{row_excel}))/B1*100'
+                worksheet.write_formula(r+4, 9, drop_formula)       # column J (index 9)
 
-                status_formula = f'=IF(I{row_excel}<=G{row_excel},"✅ PASS","❌ FAIL")'  # G = Limit
-                worksheet.write_formula(r+4, 9, status_formula)
+                status_formula = f'=IF(J{row_excel}<=H{row_excel},"✅ PASS","❌ FAIL")'  # H = Limit (col 7)
+                worksheet.write_formula(r+4, 10, status_formula)    # column K (index 10)
 
-                worksheet.write(r+4, 10, edited_t3_df.iloc[r, 10])  # Suggestion static
+                worksheet.write(r+4, 11, edited_t3_df.iloc[r, 10])  # Suggestion static (col L)
 
-            worksheet.set_column(0, 10, 18)
+            worksheet.set_column(0, 11, 18)
 
         st.download_button(
             label="📥 Download Transformer Feeders Excel Report (with formulas)",
