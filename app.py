@@ -39,7 +39,7 @@ with tab1:
 
     col_a, col_b = st.columns(2)
     pf_t1 = col_a.slider("Station Power Factor (cos φ)", 0.8, 1.0, 0.85, key="pf_t1")
-    voltage_t1 = col_b.selectbox("System Voltage (V)", [400, 230], index=0, key="v_t1")
+    voltage_t1 = col_b.selectbox("System Voltage (V)", [415, 400, 230], index=0, key="v_t1")
 
     edited_df = st.data_editor(
         pd.DataFrame(default_data),
@@ -157,7 +157,7 @@ with tab1:
     """)
 
 # ===============================
-# TAB 2: Transformer Feeder Audit (Single)
+# TAB 2: Transformer Feeder Audit (Single) – now with selectable voltage
 # ===============================
 with tab2:
     st.subheader("Transformer to MSB: Single Feeder Audit")
@@ -172,7 +172,7 @@ with tab2:
         length = st.number_input("Cable Distance (m)", value=291.0, key="length")
     with col2:
         pf_t2 = st.number_input("Power Factor", value=0.85, key="pf_t2")
-        voltage_t2 = 400  # fixed
+        voltage_t2 = st.selectbox("System Voltage (V)", [415, 400, 230], index=0, key="v_t2")
         parallel_runs = st.number_input("Number of Parallel Runs (per phase)", min_value=1, value=10, key="parallel")
         selected_size = st.selectbox("Cable Size (mm²)", list(CABLE_REF.keys()), index=3, key="size")
 
@@ -214,9 +214,11 @@ with tab2:
                 return chr(65 + idx)
 
             ws.write(0, 6, "Calculated Ib (A)")
+            # Use selected voltage in formula
             ws.write_formula(1, 6, f"=({xlsx_col(1)}2*1000)/(1.732*{voltage_t2}*{pf_t2})")
 
             ws.write(0, 7, "Actual Drop (%)")
+            # Drop formula uses voltage and parallel runs
             ws.write_formula(1, 7, f"=(({mv_am}*(G2/{xlsx_col(3)}2)*{xlsx_col(2)}2)/1000)/{voltage_t2}*100")
 
         return output.getvalue()
@@ -229,7 +231,7 @@ with tab2:
     )
 
 # ===============================
-# TAB 3: Transformer Feeders (from Image)
+# TAB 3: Transformer Feeders (from Image) – with 415V option
 # ===============================
 with tab3:
     st.subheader("Transformer to MSB Feeders (from CR13 Image)")
@@ -246,7 +248,7 @@ with tab3:
 
     col1, col2 = st.columns(2)
     pf_t3 = col1.slider("Power Factor", 0.8, 1.0, 0.85, key="pf_t3")
-    voltage_t3 = col2.selectbox("System Voltage (V)", [400, 230], index=0, key="v_t3")
+    voltage_t3 = col2.selectbox("System Voltage (V)", [415, 400, 230], index=0, key="v_t3")
 
     edited_t3_df = st.data_editor(
         pd.DataFrame(default_transformer_data),
